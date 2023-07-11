@@ -353,7 +353,7 @@ class NamedSegmentationValidator(SegmentationValidator):
 
             # Inference
             with dt[1]:
-                preds = model(batch['img'], heads=torch.ones(batch['img'].shape[0], dtype=torch.long, device=self.device) * self.head)
+                preds = model(batch['img'], heads=torch.ones(batch['img'].shape[0], dtype=torch.long, device=batch['img'].device) * self.head)
 
             # Loss
             with dt[2]:
