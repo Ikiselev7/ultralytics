@@ -1,5 +1,6 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-
+import json
+import os
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 
@@ -7,10 +8,16 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, NUM_THREADS, ops
-from ultralytics.yolo.utils.checks import check_requirements
-from ultralytics.yolo.utils.metrics import SegmentMetrics, box_iou, mask_iou
+from tqdm import tqdm
+
+from ultralytics.nn.autobackend import AutoBackend, MultiHeadAutoBackend
+from ultralytics.yolo.data.utils import check_det_dataset, check_cls_dataset
+from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, NUM_THREADS, ops, callbacks, emojis, TQDM_BAR_FORMAT, colorstr
+from ultralytics.yolo.utils.checks import check_requirements, check_imgsz
+from ultralytics.yolo.utils.metrics import SegmentMetrics, box_iou, mask_iou, ConfusionMatrix
+from ultralytics.yolo.utils.ops import Profile
 from ultralytics.yolo.utils.plotting import output_to_target, plot_images
+from ultralytics.yolo.utils.torch_utils import smart_inference_mode, select_device, de_parallel
 from ultralytics.yolo.v8.detect import DetectionValidator
 
 
@@ -241,6 +248,177 @@ class SegmentationValidator(DetectionValidator):
             except Exception as e:
                 LOGGER.warning(f'pycocotools unable to run: {e}')
         return stats
+
+
+class NamedSegmentationValidator(SegmentationValidator):
+    def __init__(self, dataloader=None, save_dir=None, pbar=None, args=None, _callbacks=None, name=None, head=None):
+        super().__init__(dataloader, save_dir, pbar, args, _callbacks)
+        self.name = name
+        self.head = head
+
+    def init_metrics(self, model):
+        """Initialize metrics and select mask processing function based on save_json flag."""
+        val = self.data.get(self.args.split, '')  # validation path
+        self.is_coco = isinstance(val, str) and 'coco' in val and val.endswith(f'{os.sep}val2017.txt')  # is COCO
+        self.class_map = ops.coco80_to_coco91_class() if self.is_coco else list(range(1000))
+        self.args.save_json |= self.is_coco and not self.training  # run on final val if training COCO
+        self.names = model.names[self.head]
+        self.nc = len(model.names[self.head])
+        self.metrics.names = self.names
+        self.metrics.plot = self.args.plots
+        self.confusion_matrix = ConfusionMatrix(nc=self.nc)
+        self.seen = 0
+        self.jdict = []
+        self.stats = []
+        self.plot_masks = []
+
+        self.plot_masks = []
+        if self.args.save_json:
+            check_requirements('pycocotools>=2.0.6')
+            self.process = ops.process_mask_upsample  # more accurate
+        else:
+            self.process = ops.process_mask  # faster
+
+
+    @smart_inference_mode()
+    def __call__(self, trainer=None, model=None):
+        """
+        Supports validation of a pre-trained model if passed or a model being trained
+        if trainer is passed (trainer gets priority).
+        """
+        self.training = trainer is not None
+        if self.training:
+            self.device = trainer.device
+            self.data = trainer.data[self.head]
+            model = trainer.ema.ema or trainer.model
+            self.args.half = self.device.type != 'cpu'  # force FP16 val during training
+            model = model.half() if self.args.half else model.float()
+            self.model = model
+            self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
+            self.args.plots = trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
+            model.eval()
+        else:
+            callbacks.add_integration_callbacks(self)
+            self.run_callbacks('on_val_start')
+            assert model is not None, 'Either trainer or model is needed for validation'
+            self.device = select_device(self.args.device, self.args.batch)
+            self.args.half &= self.device.type != 'cpu'
+            model = MultiHeadAutoBackend(model, device=self.device, dnn=self.args.dnn, data=self.args.data, fp16=self.args.half, head=self.head)
+            self.model = model
+            stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
+            imgsz = check_imgsz(self.args.imgsz, stride=stride)
+            if engine:
+                self.args.batch = model.batch_size
+            else:
+                self.device = model.device
+                if not pt and not jit:
+                    self.args.batch = 1  # export.py models default to batch-size 1
+                    LOGGER.info(f'Forcing batch=1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models')
+
+            if isinstance(self.args.data[self.head], str) and self.args.data[self.head].endswith('.yaml'):
+                self.data = check_det_dataset(self.args.data[self.head])
+            elif self.args.task == 'classify':
+                self.data = check_cls_dataset(self.args.data[self.head], split=self.args.split)
+            else:
+                raise FileNotFoundError(emojis(f"Dataset '{self.args.data[self.head]}' for task={self.args.task} not found ❌"))
+
+            if self.device.type == 'cpu':
+                self.args.workers = 0  # faster CPU val as time dominated by inference, not dataloading
+            if not pt:
+                self.args.rect = False
+
+            if isinstance(self.data, list):
+                self.dataloader = self.dataloader or self.get_dataloader(self.data[self.head].get(self.args.split), self.args.batch)
+            else:
+                self.dataloader = self.dataloader or self.get_dataloader(self.data.get(self.args.split), self.args.batch)
+
+            model.eval()
+            model.warmup(imgsz=(1 if pt else self.args.batch, 3, imgsz, imgsz))  # warmup
+
+        dt = Profile(), Profile(), Profile(), Profile()
+        n_batches = len(self.dataloader)
+        desc = self.get_desc()
+        # NOTE: keeping `not self.training` in tqdm will eliminate pbar after segmentation evaluation during training,
+        # which may affect classification task since this arg is in yolov5/classify/val.py.
+        # bar = tqdm(self.dataloader, desc, n_batches, not self.training, bar_format=TQDM_BAR_FORMAT)
+        bar = tqdm(self.dataloader, desc, n_batches, bar_format=TQDM_BAR_FORMAT)
+        self.init_metrics(de_parallel(model))
+        self.jdict = []  # empty before each val
+        for batch_i, batch in enumerate(bar):
+            self.run_callbacks('on_val_batch_start')
+            self.batch_i = batch_i
+            # Preprocess
+            with dt[0]:
+                batch = self.preprocess(batch)
+
+            # Inference
+            with dt[1]:
+                preds = model(batch['img'], heads=torch.ones(batch['img'].shape[0], dtype=torch.long, device=self.device) * self.head)
+
+            # Loss
+            with dt[2]:
+                if self.training:
+                    self.loss += trainer.criterion(preds, batch)[1]
+
+            # Postprocess
+            with dt[3]:
+                preds = self.postprocess(preds)
+
+            self.update_metrics(preds, batch)
+            if self.args.plots and batch_i < 3:
+                self.plot_val_samples(batch, batch_i)
+                self.plot_predictions(batch, preds, batch_i)
+
+            self.run_callbacks('on_val_batch_end')
+        stats = self.get_stats()
+        self.check_stats(stats)
+        self.speed = dict(zip(self.speed.keys(), (x.t / len(self.dataloader.dataset) * 1E3 for x in dt)))
+        self.finalize_metrics()
+        self.print_results()
+        self.run_callbacks('on_val_end')
+        if self.training:
+            model.float()
+            results = {**stats, **trainer.label_loss_items(self.loss.cpu() / len(self.dataloader), prefix='val')}
+            return {f"{self.name}_{k}": round(float(v), 5) for k, v in results.items()}  # return results as 5 decimal place floats
+        else:
+            LOGGER.info('Speed: %.1fms preprocess, %.1fms inference, %.1fms loss, %.1fms postprocess per image' %
+                        tuple(self.speed.values()))
+            if self.args.save_json and self.jdict:
+                with open(str(self.save_dir / 'predictions.json'), 'w') as f:
+                    LOGGER.info(f'Saving {f.name}...')
+                    json.dump(self.jdict, f)  # flatten and save
+                stats = self.eval_json(stats)  # update stats
+            if self.args.plots or self.args.save_json:
+                LOGGER.info(f"Results saved to {colorstr('bold', self.save_dir)}")
+            return stats
+
+    @property
+    def keys(self):
+        """Metric names with corresponding index."""
+        return [f'head_{self.name}_{metric}' for metric in self.metrics.keys]
+
+    def plot_val_samples(self, batch, ni):
+        """Plots validation samples with bounding box labels."""
+        plot_images(batch['img'],
+                    batch['batch_idx'],
+                    batch['cls'].squeeze(-1),
+                    batch['bboxes'],
+                    batch['masks'],
+                    paths=batch['im_file'],
+                    fname=self.save_dir / f'{self.name}_val_batch{ni}_labels.jpg',
+                    names=self.names,
+                    on_plot=self.on_plot)
+
+    def plot_predictions(self, batch, preds, ni):
+        """Plots batch predictions with masks and bounding boxes."""
+        plot_images(batch['img'],
+                    *output_to_target(preds[0], max_det=15),
+                    torch.cat(self.plot_masks, dim=0) if len(self.plot_masks) else self.plot_masks,
+                    paths=batch['im_file'],
+                    fname=self.save_dir / f'{self.name}_val_batch{ni}_pred.jpg',
+                    names=self.names,
+                    on_plot=self.on_plot)  # pred
+        self.plot_masks.clear()
 
 
 def val(cfg=DEFAULT_CFG, use_python=False):

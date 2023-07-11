@@ -4,10 +4,12 @@ Model head modules
 """
 
 import math
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
 from torch.nn.init import constant_, xavier_uniform_
+import torch.nn.functional as F
 
 from ultralytics.yolo.utils.tal import dist2bbox, make_anchors
 
@@ -70,6 +72,117 @@ class Detect(nn.Module):
             a[-1].bias.data[:] = 1.0  # box
             b[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
 
+class MultiDetect(nn.Module):
+    """YOLOv8 Detect head for detection models."""
+    dynamic = False  # force grid reconstruction
+    export = False  # export mode
+    shape = None
+    anchors = torch.empty(0)  # init
+    strides = torch.empty(0)  # init
+
+    def __init__(self, nc: List[int]=None, img_size: int=640, ch: Tuple[int]=()):  # detection layer
+        super().__init__()
+        if nc is None:
+            nc = [80, 80, 80]
+        self.nc = nc  # number of classes
+        self.nl = len(ch)  # number of detection layers
+        self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
+        self.no = [hnc + self.reg_max * 4 for hnc in nc]  # number of outputs per anchor
+        self.stride = torch.zeros(self.nl)  # strides computed during build
+        self.img_size = img_size
+
+        c2 = max((16, ch[0] // 4, self.reg_max * 4))
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch)
+        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+
+        cls_heads = []
+        for hnc in nc:
+            c3 = max(ch[0], hnc)  # channels
+            cls_heads.append(nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, hnc, 1)) for x in ch))
+        self.cls_heads = nn.ModuleList(cls_heads)
+
+
+    def forward(self, x: List[torch.Tensor], heads: torch.Tensor):
+        """Concatenates and returns predicted bounding boxes and class probabilities."""
+        assert len(x) == self.nl, "Number of layers in x must equal to self.nl"
+        heads=heads.to(dtype=torch.long)
+        output = []
+
+        # Process each layer separately
+        for layer in range(self.nl):
+            batch_images = x[layer]  # images in the layer
+            b, c, h, w = batch_images.shape  # Batch size, Channels, Height, Width
+
+            # Generate regression output
+            reg_output = self.cv2[layer](batch_images)
+
+            # Sort heads, images, and reg_output
+            sorted_indices = torch.argsort(heads)
+            sorted_heads = heads[sorted_indices]
+            sorted_images = batch_images[sorted_indices]
+            sorted_reg_output = reg_output[sorted_indices]
+
+            # Find unique heads and their counts
+            unique_heads, counts = torch.unique(sorted_heads, return_counts=True)
+            counts = torch.cat((torch.zeros(1, dtype=torch.long), counts))
+
+            # Split images into sub-batches based on unique heads
+            sub_batches = torch.split(sorted_images, counts.tolist()[1:])
+
+            output_layer = []
+
+            # Process each sub-batch with corresponding cls_head
+            for head, sub_batch in zip(unique_heads, sub_batches):
+                cls_head = self.cls_heads[head.item()][layer]  # Select the corresponding cls_head according to heads tensor
+                output_img = cls_head(sub_batch)  # Apply corresponding cls_head
+
+                # Pad the output tensor to match the maximum number of classes
+                padding_dims = (0, 0, 0, 0, 0, max(self.nc[i.item()] for i in unique_heads) - output_img.shape[1])
+                output_img = F.pad(output_img, padding_dims)
+
+                output_layer.append(output_img)
+
+            output_layer = torch.cat(output_layer)  # Concatenate sub-batches back into a single tensor
+            output_layer = torch.cat((sorted_reg_output, output_layer), 1)  # Concatenate reg_output with output_layer
+
+            output.append(output_layer)
+
+        shape = output[0].shape  # BCHW
+
+        if self.training:
+            return output
+        elif self.dynamic or self.shape != shape:
+            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(output, self.stride, 0.5))
+            self.shape = shape
+
+        x_cat = torch.cat([xi.view(shape[0], max(self.nc[i.item()] for i in unique_heads) + self.reg_max * 4, -1)
+                           for xi in output], 2)
+
+        max_classes = max(self.nc[i.item()] for i in unique_heads)
+
+        if self.export and self.format in ('saved_model', 'pb', 'tflite', 'edgetpu', 'tfjs'):  # avoid TF FlexSplitV ops
+            box = x_cat[:, :self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4:]
+        else:
+            box, cls = x_cat.split((self.reg_max * 4, max_classes), 1)
+
+        dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
+        y = torch.cat((dbox, cls.sigmoid()), 1)
+        return y if self.export else (y, output)
+
+    def bias_init(self):
+        """Initialize Detect() biases, WARNING: requires stride availability."""
+        m = self  # self.model[-1]  # Detect() module
+        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
+        # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
+        for a in m.cv2:  # from
+            a[-1].bias.data[:] = 1.0  # box
+
+        for cls_head, hnc in zip(m.cls_heads, m.nc):
+            for b, s in zip(cls_head, m.stride):  # from
+                b[-1].bias.data[:hnc] = math.log(5 / hnc / (m.img_size / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+
 
 class Segment(Detect):
     """YOLOv8 Segment head for segmentation models."""
@@ -92,6 +205,34 @@ class Segment(Detect):
 
         mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
         x = self.detect(self, x)
+        if self.training:
+            return x, mc, p
+        return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+
+
+class MultiSegment(MultiDetect):
+    """YOLOv8 Multi head segment head for segmentation models."""
+
+    def __init__(self, nc=None, nm: int=32, npr: int=256, img_size: int=640, ch: Tuple[int]=()):
+        """Initialize the YOLO model attributes such as the number of masks, prototypes, and the convolution layers."""
+        if nc is None:
+            nc = [80, 80, 80]
+        super().__init__(nc, img_size, ch)
+        self.nm = nm  # number of masks
+        self.npr = npr  # number of protos
+        self.proto = Proto(ch[0], self.npr, self.nm)  # protos
+        self.detect = MultiDetect.forward
+
+        c4 = max(ch[0] // 4, self.nm)
+        self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nm, 1)) for x in ch)
+
+    def forward(self, x: List[torch.Tensor], heads: torch.Tensor):
+        """Return model outputs and mask coefficients if training, otherwise return outputs and mask coefficients."""
+        p = self.proto(x[0])  # mask protos
+        bs = p.shape[0]  # batch size
+
+        mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
+        x = self.detect(self, x, heads)
         if self.training:
             return x, mc, p
         return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))

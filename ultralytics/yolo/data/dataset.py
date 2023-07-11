@@ -1,5 +1,5 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
-
+import itertools
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from torch.utils.data import Dataset
 import torchvision
 from tqdm import tqdm
 
@@ -127,6 +128,15 @@ class YOLODataset(BaseDataset):
         labels = cache['labels']
         self.im_files = [lb['im_file'] for lb in labels]  # update im_files
 
+        def filter_label(label):
+            if len(label['bboxes']) != len(label['segments']):
+                label['segments'] = []
+                label['bboxes'] = np.empty((0, 4))
+                label['cls'] = np.empty((0, 1))
+            return label
+
+        labels = [filter_label(lb) for lb in labels]
+
         # Check if the dataset is all boxes or all segments
         lengths = ((len(lb['cls']), len(lb['bboxes']), len(lb['segments'])) for lb in labels)
         len_cls, len_boxes, len_segments = (sum(x) for x in zip(*lengths))
@@ -197,6 +207,51 @@ class YOLODataset(BaseDataset):
             new_batch['batch_idx'][i] += i  # add target image index for build_targets()
         new_batch['batch_idx'] = torch.cat(new_batch['batch_idx'], 0)
         return new_batch
+
+
+class ConcatYOLODataset(Dataset):
+    def __init__(self, datasets):
+        super().__init__()
+        self.datasets = datasets
+
+    def __len__(self):
+        return sum([len(d) for d in self.datasets])
+
+    def __getitem__(self, index):
+        for idx, d in enumerate(self.datasets):
+            if index < len(d):
+                labels = d[index]
+                labels['head'] = idx
+                return labels
+            index -= len(d)
+
+    def close_mosaic(self, hyp):
+        for d in self.datasets:
+            d.close_mosaic(hyp)
+
+    @staticmethod
+    def collate_fn(batch):
+        new_batch = {}
+        keys = batch[0].keys()
+        values = list(zip(*[list(b.values()) for b in batch]))
+        for i, k in enumerate(keys):
+            value = values[i]
+            if k == 'img':
+                value = torch.stack(value, 0)
+            if k in ['masks', 'keypoints', 'bboxes', 'cls']:
+                value = torch.cat(value, 0)
+            if k == 'head':
+                value = torch.tensor(value)
+            new_batch[k] = value
+        new_batch['batch_idx'] = list(new_batch['batch_idx'])
+        for i in range(len(new_batch['batch_idx'])):
+            new_batch['batch_idx'][i] += i  # add target image index for build_targets()
+        new_batch['batch_idx'] = torch.cat(new_batch['batch_idx'], 0)
+        return new_batch
+
+    def labels(self):
+        return list(itertools.chain([dataset.labels() for dataset in self.datasets]))
+
 
 
 # Classification dataloaders -------------------------------------------------------------------------------------------

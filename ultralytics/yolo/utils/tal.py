@@ -102,6 +102,8 @@ class TaskAlignedAssigner(nn.Module):
         """
         self.bs = pd_scores.size(0)
         self.n_max_boxes = gt_bboxes.size(1)
+        self.num_classes = pd_scores.size(2)
+        self.bg_idx = self.num_classes
 
         if self.n_max_boxes == 0:
             device = gt_bboxes.device

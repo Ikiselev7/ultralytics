@@ -3,6 +3,7 @@
 import os
 import random
 from pathlib import Path
+from typing import List
 
 import numpy as np
 import torch
@@ -15,7 +16,7 @@ from ultralytics.yolo.data.utils import IMG_FORMATS, VID_FORMATS
 from ultralytics.yolo.utils.checks import check_file
 
 from ..utils import RANK, colorstr
-from .dataset import YOLODataset
+from .dataset import YOLODataset, ConcatYOLODataset
 from .utils import PIN_MEMORY
 
 
@@ -87,6 +88,11 @@ def build_yolo_dataset(cfg, img_path, batch, data_info, mode='train', rect=False
         use_keypoints=cfg.task == 'pose',
         classes=cfg.classes,
         data=data_info)
+
+
+def build_yolo_concat_dataset(datasets: List[YOLODataset]) -> ConcatYOLODataset:
+    """Build YOLO Dataset"""
+    return ConcatYOLODataset(datasets)
 
 
 def build_dataloader(dataset, batch, workers, shuffle=True, rank=-1):

@@ -11,6 +11,7 @@ from ultralytics.nn.modules import (AIFI, C1, C2, C3, C3TR, SPP, SPPF, Bottlenec
                                     Classify, Concat, Conv, ConvTranspose, Detect, DWConv, DWConvTranspose2d, Focus,
                                     GhostBottleneck, GhostConv, HGBlock, HGStem, Pose, RepC3, RepConv, RTDETRDecoder,
                                     Segment)
+from ultralytics.nn.modules.head import MultiDetect, MultiSegment
 from ultralytics.yolo.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.yolo.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.yolo.utils.plotting import feature_visualization
@@ -260,6 +261,104 @@ class SegmentationModel(DetectionModel):
     def _forward_augment(self, x):
         """Undocumented function."""
         raise NotImplementedError(emojis('WARNING ⚠️ SegmentationModel has not supported augment inference yet!'))
+
+
+class MultiHeadSegmentationModel(DetectionModel):
+    """YOLOv8 segmentation model."""
+    def __init__(self, cfg='yolov8n.yaml', ch=3, nc=None, verbose=True):  # model, input channels, number of classes
+        super().__init__()
+        self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
+
+        # Define model
+        ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
+        if nc and nc != self.yaml['nc']:
+            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
+            self.yaml['nc'] = nc  # override yaml value
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
+        self.names = [{i: f'{i}' for i in range(nc)} for nc in self.yaml['nc']]  # default names dict
+        self.inplace = self.yaml.get('inplace', True)
+
+        # Build strides
+        m = self.model[-1]  # Detect()
+        if isinstance(m, (Detect, MultiDetect, MultiSegment, Segment, Pose)):
+            s = 256  # 2x min stride
+            m.inplace = self.inplace
+            forward = lambda x: self.forward(x, heads=torch.zeros(1))[0]
+            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+            self.stride = m.stride
+            m.bias_init()  # only run once
+
+        # Init weights, biases
+        initialize_weights(self)
+        if verbose:
+            self.info()
+            LOGGER.info('')
+
+    def forward(self, x, augment=False, profile=False, visualize=False, heads=None):
+        """Run forward pass on input image(s) with optional augmentation and profiling."""
+        if augment:
+            return self._forward_augment(x)  # augmented inference, None
+        return self._forward(x, heads, profile, visualize)  # single-scale inference, train
+
+    def _forward(self, x, heads, profile=False, visualize=False):
+        """
+        Perform a forward pass through the network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model
+            profile (bool):  Print the computation time of each layer if True, defaults to False.
+            visualize (bool): Save the feature maps of the model if True, defaults to False
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        y, dt = [], []  # outputs
+        for m in self.model:
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            if profile:
+                self._profile_one_layer(m, x, dt)
+            if isinstance(m, (MultiDetect, MultiSegment)):
+                x = m(x, heads=heads)  # forward
+            else:
+                x = m(x)  # run
+            y.append(x if m.i in self.save else None)  # save output
+            if visualize:
+                feature_visualization(x, m.type, m.i, save_dir=visualize)
+        return x
+
+    def _forward_augment(self, x):
+        """Undocumented function."""
+        raise NotImplementedError(emojis('WARNING ⚠️ SegmentationModel has not supported augment inference yet!'))
+
+    def load(self, weights, verbose=True):
+        """Load the weights into the model.
+
+        Args:
+            weights (dict) or (torch.nn.Module): The pre-trained weights to be loaded.
+            verbose (bool, optional): Whether to log the transfer progress. Defaults to True.
+        """
+        model = weights['model'] if isinstance(weights, dict) else weights  # torchvision models are not dicts
+        head = model.model[-1]
+        csd = model.float().state_dict()  # checkpoint state_dict as FP32
+        csd = intersect_dicts(csd, self.state_dict())  # intersect
+        self.load_state_dict(csd, strict=False)  # load
+        if isinstance(head, Segment):
+            reg_cv_csd = head.cv2.state_dict()
+            reg_cv_csd = intersect_dicts(reg_cv_csd, self.model[-1].cv2.state_dict())
+            self.model[-1].cv2.load_state_dict(reg_cv_csd, strict=False)
+
+            segment_cv_csd = head.cv4.state_dict()
+            segment_cv_csd = intersect_dicts(segment_cv_csd, self.model[-1].cv4.state_dict())
+            self.model[-1].cv4.load_state_dict(segment_cv_csd, strict=False)
+
+            cls_cv_csd = head.cv3.state_dict()
+            for cls_cv in self.model[-1].cls_heads:
+                cls_cv_csd = intersect_dicts(cls_cv_csd, cls_cv.state_dict())
+                cls_cv.load_state_dict(cls_cv_csd, strict=False)
+
+        if verbose:
+            LOGGER.info(f'Transferred {len(csd)}/{len(self.model.state_dict())} items from pretrained weights')
 
 
 class PoseModel(DetectionModel):
@@ -518,9 +617,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in (Detect, Segment, Pose, RTDETRDecoder):
+        elif m in (Detect, Segment, MultiSegment, MultiDetect, Pose, RTDETRDecoder):
             args.append([ch[x] for x in f])
-            if m is Segment:
+            if m is Segment or m is MultiSegment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
         else:
             c2 = ch[f]
