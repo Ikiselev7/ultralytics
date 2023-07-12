@@ -138,7 +138,6 @@ class MultiDetect(nn.Module):
         # Process each layer separately
         for layer in range(self.nl):
             batch_images = x[layer]  # images in the layer
-            b, c, h, w = batch_images.shape  # Batch size, Channels, Height, Width
 
             # Generate regression output
             reg_output = self.cv2[layer](batch_images)
@@ -189,7 +188,7 @@ class MultiDetect(nn.Module):
 
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
-        return y if self.export else (y, x_cat)
+        return y if self.export else (y, output), cls_loss_weights_by_layer
 
     def bias_init(self):
         """Initialize Detect() biases, WARNING: requires stride availability."""
@@ -255,7 +254,7 @@ class MultiSegment(MultiDetect):
         x, cls_weights = self.detect(self, x, heads)
         if self.training:
             return x, mc, p, cls_weights
-        return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+        return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p, cls_weights))
 
 
 class Pose(Detect):
