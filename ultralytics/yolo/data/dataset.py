@@ -231,6 +231,7 @@ class ConcatYOLODataset(Dataset):
 
     @staticmethod
     def collate_fn(batch):
+        batch = sorted(batch, key=lambda x: x['head'])
         new_batch = {}
         keys = batch[0].keys()
         values = list(zip(*[list(b.values()) for b in batch]))

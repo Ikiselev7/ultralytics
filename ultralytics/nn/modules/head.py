@@ -72,6 +72,29 @@ class Detect(nn.Module):
             a[-1].bias.data[:] = 1.0  # box
             b[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
 
+
+def count_consecutive(input_tensor):
+    count_list = []
+    value_list = []
+    prev_val = input_tensor[0]
+    counter = 1
+
+    for i in range(1, len(input_tensor)):
+        if input_tensor[i] == prev_val:
+            counter += 1
+        else:
+            count_list.append(counter)
+            value_list.append(prev_val.item())
+            counter = 1
+            prev_val = input_tensor[i]
+
+    # append the count and value for the last group of identical numbers
+    count_list.append(counter)
+    value_list.append(prev_val.item())
+
+    return count_list, value_list
+
+
 class MultiDetect(nn.Module):
     """YOLOv8 Detect head for detection models."""
     dynamic = False  # force grid reconstruction
@@ -108,6 +131,9 @@ class MultiDetect(nn.Module):
         assert len(x) == self.nl, "Number of layers in x must equal to self.nl"
         heads=heads.to(dtype=torch.long)
         output = []
+        cls_loss_weights_by_layer = []
+
+        counts, f_heads = count_consecutive(heads)
 
         # Process each layer separately
         for layer in range(self.nl):
@@ -117,49 +143,43 @@ class MultiDetect(nn.Module):
             # Generate regression output
             reg_output = self.cv2[layer](batch_images)
 
-            # Sort heads, images, and reg_output
-            sorted_indices = torch.argsort(heads)
-            sorted_heads = heads[sorted_indices]
-            sorted_images = batch_images[sorted_indices]
-            sorted_reg_output = reg_output[sorted_indices]
-
-            # Find unique heads and their counts
-            unique_heads, counts = torch.unique(sorted_heads, return_counts=True)
-            counts = torch.cat((torch.zeros(1, dtype=torch.long), counts))
-
             # Split images into sub-batches based on unique heads
-            sub_batches = torch.split(sorted_images, counts.tolist()[1:])
+            sub_batches = torch.split(batch_images, counts)
 
             output_layer = []
-
+            cls_loss_weights = []
             # Process each sub-batch with corresponding cls_head
-            for head, sub_batch in zip(unique_heads, sub_batches):
-                cls_head = self.cls_heads[head.item()][layer]  # Select the corresponding cls_head according to heads tensor
+            for head, sub_batch in zip(f_heads, sub_batches):
+                cls_head = self.cls_heads[head][layer]  # Select the corresponding cls_head according to heads tensor
                 output_img = cls_head(sub_batch)  # Apply corresponding cls_head
-
+                cls_loss_weight = torch.ones_like(output_img, dtype=output_img.dtype, device=output_img.device)
                 # Pad the output tensor to match the maximum number of classes
-                padding_dims = (0, 0, 0, 0, 0, max(self.nc[i.item()] for i in unique_heads) - output_img.shape[1])
+                padding_dims = (0, 0, 0, 0, 0, max(self.nc[i] for i in f_heads) - output_img.shape[1])
                 output_img = F.pad(output_img, padding_dims)
+                cls_loss_weight = F.pad(cls_loss_weight, padding_dims)
 
                 output_layer.append(output_img)
+                cls_loss_weights.append(cls_loss_weight)
 
             output_layer = torch.cat(output_layer)  # Concatenate sub-batches back into a single tensor
-            output_layer = torch.cat((sorted_reg_output, output_layer), 1)  # Concatenate reg_output with output_layer
+            output_layer = torch.cat((reg_output, output_layer), 1)  # Concatenate reg_output with output_layer
+            cls_loss_weights = torch.cat(cls_loss_weights)  # Concatenate cls_loss_weights
 
             output.append(output_layer)
+            cls_loss_weights_by_layer.append(cls_loss_weights)
 
         shape = output[0].shape  # BCHW
 
         if self.training:
-            return output
+            return output, cls_loss_weights_by_layer
         elif self.dynamic or self.shape != shape:
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(output, self.stride, 0.5))
             self.shape = shape
 
-        x_cat = torch.cat([xi.view(shape[0], max(self.nc[i.item()] for i in unique_heads) + self.reg_max * 4, -1)
+        x_cat = torch.cat([xi.view(shape[0], max(self.nc[i.item()] for i in f_heads) + self.reg_max * 4, -1)
                            for xi in output], 2)
 
-        max_classes = max(self.nc[i.item()] for i in unique_heads)
+        max_classes = max(self.nc[i.item()] for i in f_heads)
 
         if self.export and self.format in ('saved_model', 'pb', 'tflite', 'edgetpu', 'tfjs'):  # avoid TF FlexSplitV ops
             box = x_cat[:, :self.reg_max * 4]
@@ -232,9 +252,9 @@ class MultiSegment(MultiDetect):
         bs = p.shape[0]  # batch size
 
         mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
-        x = self.detect(self, x, heads)
+        x, cls_weights = self.detect(self, x, heads)
         if self.training:
-            return x, mc, p
+            return x, mc, p, cls_weights
         return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
 
 

@@ -478,15 +478,17 @@ class SegLoss(Loss):
     def __call__(self, preds, batch):
         """Calculate and return the loss for the YOLO model."""
         loss = torch.zeros(4, device=self.device)  # box, cls, dfl
-        feats, pred_masks, proto = preds if len(preds) == 3 else preds[1]
+        feats, pred_masks, proto, cls_weights = preds if len(preds) == 4 else preds[1]
         batch_size, _, mask_h, mask_w = proto.shape  # batch size, number of masks, mask height, mask width
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], feats[0].shape[1], -1) for xi in feats], 2).split(
             (self.reg_max * 4, feats[0].shape[1] - self.reg_max * 4), 1)
+        cls_weights = torch.cat([ci.view(cls_weights[0].shape[0], cls_weights[0].shape[1], -1) for ci in cls_weights], 2)
 
         # b, grids, ..
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
         pred_distri = pred_distri.permute(0, 2, 1).contiguous()
         pred_masks = pred_masks.permute(0, 2, 1).contiguous()
+        cls_weights = cls_weights.permute(0, 2, 1).contiguous()
 
         dtype = pred_scores.dtype
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
@@ -510,14 +512,14 @@ class SegLoss(Loss):
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
 
         _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
-            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            pred_scores.detach().sigmoid() * cls_weights, (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
             anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
 
         target_scores_sum = max(target_scores.sum(), 1)
 
         # cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[2] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        loss[2] = (self.bce(pred_scores, target_scores.to(dtype)) * cls_weights).sum() / target_scores_sum  # BCE
 
         if fg_mask.sum():
             # bbox loss
