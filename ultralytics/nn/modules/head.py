@@ -176,10 +176,10 @@ class MultiDetect(nn.Module):
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(output, self.stride, 0.5))
             self.shape = shape
 
-        x_cat = torch.cat([xi.view(shape[0], max(self.nc[i.item()] for i in f_heads) + self.reg_max * 4, -1)
+        x_cat = torch.cat([xi.view(shape[0], max(self.nc[i] for i in f_heads) + self.reg_max * 4, -1)
                            for xi in output], 2)
 
-        max_classes = max(self.nc[i.item()] for i in f_heads)
+        max_classes = max(self.nc[i] for i in f_heads)
 
         if self.export and self.format in ('saved_model', 'pb', 'tflite', 'edgetpu', 'tfjs'):  # avoid TF FlexSplitV ops
             box = x_cat[:, :self.reg_max * 4]
