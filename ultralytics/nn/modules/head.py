@@ -189,7 +189,7 @@ class MultiDetect(nn.Module):
 
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
-        return y if self.export else (y, output)
+        return y if self.export else (y, x_cat)
 
     def bias_init(self):
         """Initialize Detect() biases, WARNING: requires stride availability."""
