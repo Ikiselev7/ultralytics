@@ -24,6 +24,32 @@ except ImportError:
     thop = None
 
 
+P6_P5_MAPPING = {
+    0:0,
+    1:1,
+    2:2,
+    3:3,
+    4:4,
+    5:5,
+    6:6,
+    9:7,
+    10:8,
+    11:9,
+    15:10,
+    16:11,
+    17:12,
+    18:13,
+    19:14,
+    20:15,
+    21:16,
+    22:17,
+    23:18,
+    27:19,
+    28:20,
+    29:21,
+    30:22,
+}
+
 class BaseModel(nn.Module):
     """
     The BaseModel class serves as a base class for all the models in the Ultralytics YOLO family.
@@ -250,6 +276,31 @@ class DetectionModel(BaseModel):
         y[-1] = y[-1][..., i:]  # small
         return y
 
+    def load(self, weights, verbose=True):
+        """Load the weights into the model.
+
+        Args:
+            weights (dict) or (torch.nn.Module): The pre-trained weights to be loaded.
+            verbose (bool, optional): Whether to log the transfer progress. Defaults to True.
+        """
+        model = weights['model'] if isinstance(weights, dict) else weights  # torchvision models are not dicts
+        if model.model[-1].nl == 3 and self.model[-1].nl == 4: # init P6 from P5 weights
+            p5_modules = [model.model[i] for i in iter(P6_P5_MAPPING.values())]
+            p6_modules = [self.model[i] for i in iter(P6_P5_MAPPING.keys())]
+            count = 0
+            for p5, p6 in zip(p5_modules, p6_modules):
+                csd = p5.float().state_dict()  # checkpoint state_dict as FP32
+                csd = intersect_dicts(csd, p6.state_dict())  # intersect
+                p6.load_state_dict(csd, strict=False)  # load
+                count += len(csd)
+            if verbose:
+                LOGGER.info(f'Transferred {count}/{len(self.model.state_dict())} items from pretrained weights')
+        else:
+            csd = model.float().state_dict()  # checkpoint state_dict as FP32
+            csd = intersect_dicts(csd, self.state_dict())  # intersect
+            self.load_state_dict(csd, strict=False)  # load
+            if verbose:
+                LOGGER.info(f'Transferred {len(csd)}/{len(self.model.state_dict())} items from pretrained weights')
 
 class SegmentationModel(DetectionModel):
     """YOLOv8 segmentation model."""

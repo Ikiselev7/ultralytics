@@ -19,13 +19,13 @@ backbone:
   - [-1, 3, C2f, [128, True]]
   - [-1, 1, Conv, [256, 3, 2]]  # 3-P3/8
   - [-1, 6, C2f, [256, True]]
-  - [-1, 1, Conv, [512, 3, 2]]  # 5-P4/16
-  - [-1, 6, C2f, [512, True]]
-  - [-1, 1, Conv, [768, 3, 2]]  # 7-P5/32
-  - [-1, 3, C2f, [768, True]]
-  - [-1, 1, Conv, [1024, 3, 2]]  # 9-P6/64
-  - [-1, 3, C2f, [1024, True]]
-  - [-1, 1, SPPF, [1024, 5]]  # 11
+  - [-1, 1, Conv, [512, 3, 2]]  # 5-P4/16 #same as p5
+  - [-1, 6, C2f, [512, True]]             #same as p5
+  - [-1, 1, Conv, [768, 3, 2]]  # 7-P5/32 #new
+  - [-1, 3, C2f, [768, True]]             #new
+  - [-1, 1, Conv, [1024, 3, 2]]  # 9-P6/64 #partially new (only conv) p5 7
+  - [-1, 3, C2f, [1024, True]]             #same as  p5 8
+  - [-1, 1, SPPF, [1024, 5]]  # 11         #same as  p5 9
 
 # YOLOv8.0x6 head
 head:
@@ -33,24 +33,24 @@ head:
   - [[-1, 8], 1, Concat, [1]]  # cat backbone P5
   - [-1, 3, C2f, [768]]  # 14
 
-  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]
-  - [[-1, 6], 1, Concat, [1]]  # cat backbone P4
-  - [-1, 3, C2f, [512]]  # 17
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]   #p5 10
+  - [[-1, 6], 1, Concat, [1]]  # cat backbone P4 # p5 11
+  - [-1, 3, C2f, [512]]  # 17                    #partially new (only conv) with p5 12
 
-  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]
-  - [[-1, 4], 1, Concat, [1]]  # cat backbone P3
-  - [-1, 3, C2f, [256]]  # 20 (P3/8-small)
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]   #p5 13
+  - [[-1, 4], 1, Concat, [1]]  # cat backbone P3 # p5 14
+  - [-1, 3, C2f, [256]]  # 20 (P3/8-small)       #same as p5 15
 
-  - [-1, 1, Conv, [256, 3, 2]]
-  - [[-1, 17], 1, Concat, [1]]  # cat head P4
-  - [-1, 3, C2f, [512]]  # 23 (P4/16-medium)
+  - [-1, 1, Conv, [256, 3, 2]]                   #p5 16
+  - [[-1, 17], 1, Concat, [1]]  # cat head P4    #p5 17
+  - [-1, 3, C2f, [512]]  # 23 (P4/16-medium)     #same as p5 18
 
-  - [-1, 1, Conv, [512, 3, 2]]
-  - [[-1, 14], 1, Concat, [1]]  # cat head P5
-  - [-1, 3, C2f, [768]]  # 26 (P5/32-large)
+  - [-1, 1, Conv, [512, 3, 2]]                   #new
+  - [[-1, 14], 1, Concat, [1]]  # cat head P5    #new
+  - [-1, 3, C2f, [768]]  # 26 (P5/32-large)      #new
 
-  - [-1, 1, Conv, [768, 3, 2]]
-  - [[-1, 11], 1, Concat, [1]]  # cat head P6
-  - [-1, 3, C2f, [1024]]  # 29 (P6/64-xlarge)
+  - [-1, 1, Conv, [768, 3, 2]]                   #p5 19
+  - [[-1, 11], 1, Concat, [1]]  # cat head P6    #p5 20
+  - [-1, 3, C2f, [1024]]  # 29 (P6/64-xlarge)    #partially new (only conv) with p5 21
 
-  - [[20, 23, 26, 29], 1, Segment, [nc, 32, 256]]  # Segment(P3, P4, P5, P6)
+  - [[20, 23, 26, 29], 1, Segment, [nc, 32, 256, 16]]  # Segment(P3, P4, P5, P6)

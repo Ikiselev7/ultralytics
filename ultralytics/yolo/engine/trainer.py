@@ -116,6 +116,7 @@ class BaseTrainer:
 
         # Model and Dataset
         self.model = self.args.model
+        self.weights = self.args.weights
         try:
             if self.args.task == 'classify':
                 self.data = check_cls_dataset(self.args.data)
@@ -442,13 +443,14 @@ class BaseTrainer:
         if isinstance(self.model, torch.nn.Module):  # if model is loaded beforehand. No setup needed
             return
 
-        model, weights = self.model, None
+        model, weights = self.model, self.weights
         ckpt = None
         if str(model).endswith('.pt'):
             weights, ckpt = attempt_load_one_weight(model)
             cfg = ckpt['model'].yaml
         else:
             cfg = model
+            weights, _ = attempt_load_one_weight(weights)
         self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
         return ckpt
 

@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from ultralytics.nn.tasks import SegmentationModel
 from ultralytics.yolo import v8
-from ultralytics.yolo.utils import DEFAULT_CFG, RANK
+from ultralytics.yolo.utils import DEFAULT_CFG, RANK, IterableSimpleNamespace, yaml_load, ROOT
 from ultralytics.yolo.utils.ops import crop_mask, xyxy2xywh
 from ultralytics.yolo.utils.plotting import plot_images, plot_results
 from ultralytics.yolo.utils.tal import make_anchors
@@ -170,4 +170,5 @@ def train(cfg=DEFAULT_CFG, use_python=False):
 
 
 if __name__ == '__main__':
+    # train(cfg=IterableSimpleNamespace(**yaml_load(file=ROOT / 'yolo/cfg/p6.yaml')))
     train()

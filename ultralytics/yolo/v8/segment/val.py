@@ -59,8 +59,8 @@ class SegmentationValidator(DetectionValidator):
                                     multi_label=True,
                                     agnostic=self.args.single_cls,
                                     max_det=self.args.max_det,
-                                    nc=preds[0].shape[1] - 32 -4)
-        proto = preds[1][-2] if len(preds[1]) == 4 else preds[1]  # second output is len 3 if pt, but only 1 if exported
+                                    nc=self.nc)
+        proto = preds[1][-1] if len(preds[1]) == 3 else preds[1]  # second output is len 3 if pt, but only 1 if exported
         return p, proto
 
     def update_metrics(self, preds, batch):
@@ -279,6 +279,18 @@ class NamedSegmentationValidator(SegmentationValidator):
         else:
             self.process = ops.process_mask  # faster
 
+    def postprocess(self, preds):
+        """Postprocesses YOLO predictions and returns output detections with proto."""
+        p = ops.non_max_suppression(preds[0],
+                                    self.args.conf,
+                                    self.args.iou,
+                                    labels=self.lb,
+                                    multi_label=True,
+                                    agnostic=self.args.single_cls,
+                                    max_det=self.args.max_det,
+                                    nc=preds[0].shape[1] - 32 -4)
+        proto = preds[1][-2] if len(preds[1]) == 4 else preds[1]  # second output is len 3 if pt, but only 1 if exported
+        return p, proto
 
     @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
