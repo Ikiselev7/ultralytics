@@ -66,6 +66,7 @@ class SegLoss(Loss):
         super().__init__(model)
         self.nm = model.model[-1].nm  # number of masks
         self.overlap = overlap
+        self.eps=1e-3
 
     def __call__(self, preds, batch):
         """Calculate and return the loss for the YOLO model."""
@@ -130,7 +131,7 @@ class SegLoss(Loss):
                     xyxyn = target_bboxes[i][fg_mask[i]] / imgsz[[1, 0, 1, 0]]
                     marea = xyxy2xywh(xyxyn)[:, 2:].prod(1)
                     mxyxy = xyxyn * torch.tensor([mask_w, mask_h, mask_w, mask_h], device=self.device)
-                    loss[1] += self.single_mask_loss(gt_mask, pred_masks[i][fg_mask[i]], proto[i], mxyxy, marea)  # seg
+                    loss[1] += self.single_mask_dice_loss(gt_mask, pred_masks[i][fg_mask[i]], proto[i], mxyxy, marea)  # seg
 
                 # WARNING: lines below prevents Multi-GPU DDP 'unused gradient' PyTorch errors, do not remove
                 else:
@@ -153,6 +154,22 @@ class SegLoss(Loss):
         loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction='none')
         return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).mean()
 
+    def single_mask_dice_loss(self, gt_mask, pred, proto, xyxy, area):
+        """Mask loss for one image."""
+        pred_mask = (pred @ proto.view(self.nm, -1)).view(-1, *proto.shape[1:])
+        pred_mask = pred_mask.sigmoid()
+        pred_mask = crop_mask(pred_mask, xyxy)
+        target = crop_mask(gt_mask, xyxy)
+        input = pred_mask.flatten(1)
+        target = target.flatten(1).float()
+        a = torch.sum(input * target, 1)
+        b = torch.sum(input * input, 1) + self.eps
+        c = torch.sum(target * target, 1) + self.eps
+        d = (2 * a) / (b + c)
+        loss = 1 - d
+        return loss.mean()
+
+
 
 def train(cfg=DEFAULT_CFG, use_python=False):
     """Train a YOLO segmentation model based on passed arguments."""
@@ -171,4 +188,4 @@ def train(cfg=DEFAULT_CFG, use_python=False):
 
 if __name__ == '__main__':
     # train(cfg=IterableSimpleNamespace(**yaml_load(file=ROOT / 'yolo/cfg/p6.yaml')))
-    train()
+    train(cfg=IterableSimpleNamespace(**yaml_load(file=ROOT / 'yolo/cfg/p6.yaml')))
