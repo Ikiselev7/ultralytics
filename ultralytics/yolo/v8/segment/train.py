@@ -67,6 +67,14 @@ class SegLoss(Loss):
         self.nm = model.model[-1].nm  # number of masks
         self.overlap = overlap
 
+    @staticmethod
+    def _smooth(targets:torch.Tensor, fg_mask, smoothing=0.0):
+        assert 0 <= smoothing < 1
+        fg_mask = fg_mask.float()
+        with torch.no_grad():
+            targets = (targets * (1.0 - smoothing) + 0.5 * smoothing) * fg_mask.unsqueeze(-1)
+        return targets
+
     def __call__(self, preds, batch):
         """Calculate and return the loss for the YOLO model."""
         loss = torch.zeros(4, device=self.device)  # box, cls, dfl
@@ -109,7 +117,7 @@ class SegLoss(Loss):
 
         # cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[2] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        loss[2] = self.bce(pred_scores, self._smooth(target_scores.to(dtype), fg_mask, 0.01)).sum() / target_scores_sum  # BCE
 
         if fg_mask.sum():
             # bbox loss
