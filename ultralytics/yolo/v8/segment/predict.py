@@ -3,7 +3,7 @@
 import torch
 
 from ultralytics.yolo.engine.results import Results
-from ultralytics.yolo.utils import DEFAULT_CFG, ROOT, ops
+from ultralytics.yolo.utils import DEFAULT_CFG, ROOT, ops, IterableSimpleNamespace, yaml_load
 from ultralytics.yolo.v8.detect.predict import DetectionPredictor
 
 
@@ -55,9 +55,9 @@ def predict(cfg=DEFAULT_CFG, use_python=False):
         from ultralytics import YOLO
         YOLO(model)(**args)
     else:
-        predictor = SegmentationPredictor(overrides=args)
+        predictor = SegmentationPredictor(cfg=cfg, overrides=args)
         predictor.predict_cli()
 
 
 if __name__ == '__main__':
-    predict()
+    predict(cfg=IterableSimpleNamespace(**yaml_load(file=ROOT / 'yolo/cfg/default.yaml')))

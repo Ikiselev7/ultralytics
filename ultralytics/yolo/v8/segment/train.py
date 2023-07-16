@@ -132,8 +132,8 @@ class SegLoss(Loss):
                     marea = xyxy2xywh(xyxyn)[:, 2:].prod(1)
                     mxyxy = xyxyn * torch.tensor([mask_w, mask_h, mask_w, mask_h], device=self.device)
                     pred_mask = (pred_masks[i][fg_mask[i]] @ proto[i].view(self.nm, -1)).view(-1, *proto[i].shape[1:])
-                    loss[1] += 0.5 * self.single_mask_dice_loss(gt_mask, pred_mask, mxyxy, marea)  # seg
-                    loss[1] += 0.5 * self.single_mask_loss(gt_mask, pred_mask, mxyxy, marea)  # seg
+                    loss[1] += self.single_mask_dice_loss(gt_mask, pred_mask, mxyxy, marea)  # seg
+                    # loss[1] += 0.5 * self.single_mask_loss(gt_mask, pred_mask, mxyxy, marea)  # seg
 
                 # WARNING: lines below prevents Multi-GPU DDP 'unused gradient' PyTorch errors, do not remove
                 else:
