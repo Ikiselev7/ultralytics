@@ -443,7 +443,7 @@ def val(cfg=DEFAULT_CFG, use_python=False):
         from ultralytics import YOLO
         YOLO(model).val(**args)
     else:
-        validator = SegmentationValidator(args=args)
+        validator = SegmentationValidator(args=cfg)
         validator(model=args['model'])
 
 

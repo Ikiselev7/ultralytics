@@ -21,7 +21,7 @@ project:  # project name
 name:  # experiment name, results saved to 'project/name' directory
 exist_ok: False  # whether to overwrite existing experiment
 pretrained: False  # whether to use a pretrained model
-optimizer: SGD  # optimizer to use, choices=['SGD', 'Adam', 'AdamW', 'RMSProp']
+optimizer: Sophia  # optimizer to use, choices=['SGD', 'Adam', 'AdamW', 'RMSProp']
 verbose: True  # whether to print verbose output
 seed: 0  # random seed for reproducibility
 deterministic: True  # whether to enable deterministic mode
@@ -78,7 +78,7 @@ workspace: 4  # TensorRT: workspace size (GB)
 nms: False  # CoreML: add NMS
 
 # Hyperparameters ------------------------------------------------------------------------------------------------------
-lr0: 0.01  # initial learning rate (i.e. SGD=1E-2, Adam=1E-3)
+lr0: 0.001  # initial learning rate (i.e. SGD=1E-2, Adam=1E-3)
 lrf: 0.01  # final learning rate (lr0 * lrf)
 momentum: 0.937  # SGD momentum/Adam beta1
 weight_decay: 0.0005  # optimizer weight decay 5e-4
