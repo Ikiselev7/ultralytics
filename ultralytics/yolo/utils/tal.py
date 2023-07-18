@@ -301,7 +301,7 @@ class SoftTaskAlignedAssigner(nn.Module):
     @staticmethod
     def _smooth(targets:torch.Tensor, fg_mask, smoothing=0.0):
         assert 0 <= smoothing < 1
-        fg_mask = fg_mask.float()
+        fg_mask = fg_mask.to(targets.dtype)
         with torch.no_grad():
             targets = (targets * (1.0 - smoothing) + 0.5 * smoothing) * fg_mask.unsqueeze(-1)
         return targets
