@@ -384,7 +384,7 @@ class SoftTaskAlignedAssigner(nn.Module):
                       self._smooth(torch.nn.functional.one_hot(
                           gt_labels.expand([self.bs, self.n_max_boxes, na]).long(),
                           pd_scores.size(2)
-                      ), mask_gt, 0.1))[mask_gt]
+                      ).to(bbox_scores.dtype), mask_gt, 0.1))[mask_gt]
 
         # (b, max_num_obj, 1, 4), (b, 1, h*w, 4)
         pd_boxes = pd_bboxes.unsqueeze(1).expand(-1, self.n_max_boxes, -1, -1)[mask_gt]
