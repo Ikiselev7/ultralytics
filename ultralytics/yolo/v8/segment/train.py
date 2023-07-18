@@ -9,7 +9,7 @@ from ultralytics.yolo import v8
 from ultralytics.yolo.utils import DEFAULT_CFG, RANK, IterableSimpleNamespace, yaml_load, ROOT
 from ultralytics.yolo.utils.ops import crop_mask, xyxy2xywh
 from ultralytics.yolo.utils.plotting import plot_images, plot_results
-from ultralytics.yolo.utils.tal import make_anchors
+from ultralytics.yolo.utils.tal import make_anchors, SoftTaskAlignedAssigner
 from ultralytics.yolo.utils.torch_utils import de_parallel
 from ultralytics.yolo.v8.detect.train import Loss
 
@@ -66,6 +66,7 @@ class SegLoss(Loss):
         super().__init__(model)
         self.nm = model.model[-1].nm  # number of masks
         self.overlap = overlap
+        self.assigner = SoftTaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
 
     @staticmethod
     def _smooth(targets:torch.Tensor, fg_mask, smoothing=0.0):
@@ -117,7 +118,7 @@ class SegLoss(Loss):
 
         # cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[2] = self.bce(pred_scores, self._smooth(target_scores.to(dtype), fg_mask, 0.1)).sum() / target_scores_sum  # BCE
+        loss[2] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
 
         if fg_mask.sum():
             # bbox loss
