@@ -628,7 +628,7 @@ def choose_best_mask(masks, bboxes):
             if score > score_match:
                 match = torch.tensor(object_mask, dtype=masks.dtype, device=bboxes.device)
         objects_masks.append(match)
-    return torch.stack(objects_masks)
+    return torch.stack(objects_masks).to(device=masks.device)
 
 
 def process_mask_native(protos, masks_in, bboxes, shape):
