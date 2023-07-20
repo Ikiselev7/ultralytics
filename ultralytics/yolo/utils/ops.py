@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision
+from skimage.measure import label
 
 from ultralytics.yolo.utils import LOGGER
 
@@ -573,8 +574,7 @@ def process_mask_upsample(protos, masks_in, bboxes, shape):
     c, mh, mw = protos.shape  # CHW
     masks = (masks_in @ protos.float().view(c, -1)).sigmoid().view(-1, mh, mw)
     masks = F.interpolate(masks[None], shape, mode='bilinear', align_corners=False)[0]  # CHW
-    masks = crop_mask(masks, bboxes)  # CHW
-    return masks.gt_(0.5)
+    return choose_best_mask(masks, bboxes)
 
 
 def process_mask(protos, masks_in, bboxes, shape, upsample=False):
@@ -603,10 +603,31 @@ def process_mask(protos, masks_in, bboxes, shape, upsample=False):
     downsampled_bboxes[:, 3] *= mh / ih
     downsampled_bboxes[:, 1] *= mh / ih
 
-    masks = crop_mask(masks, downsampled_bboxes)  # CHW
+    masks = choose_best_mask(masks, downsampled_bboxes)  # CHW
     if upsample:
         masks = F.interpolate(masks[None], shape, mode='bilinear', align_corners=False)[0]  # CHW
     return masks.gt_(0.5)
+
+
+def choose_best_mask(masks, bboxes):
+    labels = label(masks.gt_(0.5))
+    objects_masks = []
+    msk_bbox = crop_mask(masks.gt_(0.5), bboxes)
+    for msk, lbl in zip(msk_bbox, labels):
+        msk_np = msk.detach().numpy()
+        # Get all unique labels (excluding the background)
+        unique_labels = np.unique(lbl)[1:]  # exclude background label (0)
+
+        # Extract separate binary mask for each object and choose best matching with bbox mask
+        match = msk
+        score_match = 0
+        for unique_label in unique_labels:
+            object_mask = np.where(lbl == unique_label, 1, 0)
+            score = (object_mask * msk_np).sum()
+            if score > score_match:
+                match = torch.tensor(object_mask, dtype=masks.dtype, device=masks.device)
+        objects_masks.append(match)
+    return torch.stack(objects_masks)
 
 
 def process_mask_native(protos, masks_in, bboxes, shape):
@@ -631,8 +652,7 @@ def process_mask_native(protos, masks_in, bboxes, shape):
     masks = masks[:, top:bottom, left:right]
 
     masks = F.interpolate(masks[None], shape, mode='bilinear', align_corners=False)[0]  # CHW
-    masks = crop_mask(masks, bboxes)  # CHW
-    return masks.gt_(0.5)
+    return choose_best_mask(masks, bboxes)
 
 
 def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None, normalize=False):
