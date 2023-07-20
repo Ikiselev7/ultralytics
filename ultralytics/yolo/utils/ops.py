@@ -612,9 +612,10 @@ def process_mask(protos, masks_in, bboxes, shape, upsample=False):
 def choose_best_mask(masks, bboxes):
     labels = label(masks.gt_(0.5).cpu())
     objects_masks = []
+    bboxes = bboxes.cpu()
     msk_bbox = crop_mask(masks.gt_(0.5).cpu(), bboxes)
     for msk, lbl in zip(msk_bbox, labels):
-        msk_np = msk.detach().numpy()
+        msk_np = msk.numpy()
         # Get all unique labels (excluding the background)
         unique_labels = np.unique(lbl)[1:]  # exclude background label (0)
 
