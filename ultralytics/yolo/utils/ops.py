@@ -626,7 +626,7 @@ def choose_best_mask(masks, bboxes):
             object_mask = np.where(lbl == unique_label, 1, 0)
             score = (object_mask * msk_np).sum()
             if score > score_match:
-                match = torch.tensor(object_mask, dtype=masks.dtype, device=masks.device)
+                match = torch.tensor(object_mask, dtype=masks.dtype, device=bboxes.device)
         objects_masks.append(match)
     return torch.stack(objects_masks)
 
