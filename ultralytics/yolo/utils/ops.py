@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision
+from skimage.measure import label
 
 from ultralytics.yolo.utils import LOGGER
 
