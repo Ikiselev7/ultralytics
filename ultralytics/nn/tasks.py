@@ -314,7 +314,7 @@ class SegmentationModel(DetectionModel):
         raise NotImplementedError(emojis('WARNING ⚠️ SegmentationModel has not supported augment inference yet!'))
 
 
-class MultiHeadSegmentationModel(DetectionModel):
+class MultiHeadSegmentationModel(BaseModel):
     """YOLOv8 segmentation model."""
     def __init__(self, cfg='yolov8n.yaml', ch=3, nc=None, verbose=True):  # model, input channels, number of classes
         super().__init__()
@@ -390,10 +390,24 @@ class MultiHeadSegmentationModel(DetectionModel):
             verbose (bool, optional): Whether to log the transfer progress. Defaults to True.
         """
         model = weights['model'] if isinstance(weights, dict) else weights  # torchvision models are not dicts
+        if model.model[-1].nl == 3 and self.model[-1].nl == 4: # init P6 from P5 weights
+            p5_modules = [model.model[i] for i in iter(P6_P5_MAPPING.values())]
+            p6_modules = [self.model[i] for i in iter(P6_P5_MAPPING.keys())]
+            count = 0
+            for p5, p6 in zip(p5_modules, p6_modules):
+                csd = p5.float().state_dict()  # checkpoint state_dict as FP32
+                csd = intersect_dicts(csd, p6.state_dict())  # intersect
+                p6.load_state_dict(csd, strict=False)  # load
+                count += len(csd)
+            if verbose:
+                LOGGER.info(f'Transferred {count}/{len(self.model.state_dict())} items from pretrained weights')
+        else:
+            csd = model.float().state_dict()  # checkpoint state_dict as FP32
+            csd = intersect_dicts(csd, self.state_dict())  # intersect
+            self.load_state_dict(csd, strict=False)  # load
+            if verbose:
+                LOGGER.info(f'Transferred {len(csd)}/{len(self.model.state_dict())} items from pretrained weights')
         head = model.model[-1]
-        csd = model.float().state_dict()  # checkpoint state_dict as FP32
-        csd = intersect_dicts(csd, self.state_dict())  # intersect
-        self.load_state_dict(csd, strict=False)  # load
         if isinstance(head, Segment):
             reg_cv_csd = head.cv2.state_dict()
             reg_cv_csd = intersect_dicts(reg_cv_csd, self.model[-1].cv2.state_dict())
@@ -407,9 +421,6 @@ class MultiHeadSegmentationModel(DetectionModel):
             for cls_cv in self.model[-1].cls_heads:
                 cls_cv_csd = intersect_dicts(cls_cv_csd, cls_cv.state_dict())
                 cls_cv.load_state_dict(cls_cv_csd, strict=False)
-
-        if verbose:
-            LOGGER.info(f'Transferred {len(csd)}/{len(self.model.state_dict())} items from pretrained weights')
 
 
 class PoseModel(DetectionModel):
