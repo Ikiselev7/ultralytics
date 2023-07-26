@@ -138,13 +138,17 @@ class DetectionTrainer(BaseTrainer):
 # Criterion class for computing training losses
 class Loss:
 
-    def __init__(self, model):  # model must be de-paralleled
+    def __init__(self, model, pos_weight=None):  # model must be de-paralleled
 
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
 
         m = model.model[-1]  # Detect() module
-        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        if pos_weight is None:
+            self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        else:
+            pos_weight = torch.tensor(pos_weight, device=device)
+            self.bce = nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes

@@ -40,7 +40,7 @@ class SegmentationTrainer(v8.detect.DetectionTrainer):
     def criterion(self, preds, batch):
         """Returns the computed loss using the SegLoss class on the given predictions and batch."""
         if not hasattr(self, 'compute_loss'):
-            self.compute_loss = SegLoss(de_parallel(self.model), overlap=self.args.overlap_mask)
+            self.compute_loss = SegLoss(de_parallel(self.model), overlap=self.args.overlap_mask, pos_weight=self.cls_weights)
         return self.compute_loss(preds, batch)
 
     def plot_training_samples(self, batch, ni):
@@ -62,8 +62,8 @@ class SegmentationTrainer(v8.detect.DetectionTrainer):
 # Criterion class for computing training losses
 class SegLoss(Loss):
 
-    def __init__(self, model, overlap=True):  # model must be de-paralleled
-        super().__init__(model)
+    def __init__(self, model, overlap=True, pos_weight=None):  # model must be de-paralleled
+        super().__init__(model, pos_weight=pos_weight)
         self.nm = model.model[-1].nm  # number of masks
         self.overlap = overlap
 
