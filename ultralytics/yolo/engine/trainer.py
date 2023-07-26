@@ -283,9 +283,7 @@ class BaseTrainer:
         if labels:
             unique, counts = np.unique(np.concatenate([lbl['cls'] for lbl in labels]).squeeze(), return_counts=True)
             sum = counts.sum()
-            for clss, count in sorted(zip(unique, counts), key=lambda x: x[0]):
-                weight = (sum - count) / count
-                self.cls_weights.append(weight)
+            self.cls_weights = np.log(sum - counts / (counts + 1))
         nw = max(round(self.args.warmup_epochs * nb), 100)  # number of warmup iterations
         last_opt_step = -1
         self.run_callbacks('on_train_start')
