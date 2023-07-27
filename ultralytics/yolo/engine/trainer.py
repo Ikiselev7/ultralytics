@@ -280,10 +280,10 @@ class BaseTrainer:
         nb = len(self.train_loader)  # number of batches
         labels = self.train_loader.dataset.labels if hasattr(self.train_loader.dataset, 'labels') else None
         self.cls_weights = []
-        if labels:
-            unique, counts = np.unique(np.concatenate([lbl['cls'] for lbl in labels]).squeeze(), return_counts=True)
-            sum = counts.sum()
-            self.cls_weights = np.log(sum - counts / (counts + 1))
+        # if labels:
+        #     unique, counts = np.unique(np.concatenate([lbl['cls'] for lbl in labels]).squeeze(), return_counts=True)
+        #     sum = counts.sum()
+        #     self.cls_weights = np.log(sum - counts / (counts + 1))
         nw = max(round(self.args.warmup_epochs * nb), 100)  # number of warmup iterations
         last_opt_step = -1
         self.run_callbacks('on_train_start')

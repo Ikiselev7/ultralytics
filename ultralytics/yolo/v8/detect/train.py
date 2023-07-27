@@ -11,7 +11,7 @@ from ultralytics.yolo.data import build_dataloader, build_yolo_dataset
 from ultralytics.yolo.data.dataloaders.v5loader import create_dataloader
 from ultralytics.yolo.engine.trainer import BaseTrainer
 from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, RANK, colorstr
-from ultralytics.yolo.utils.loss import BboxLoss
+from ultralytics.yolo.utils.loss import BboxLoss, FocalLoss
 from ultralytics.yolo.utils.ops import xywh2xyxy
 from ultralytics.yolo.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.yolo.utils.tal import TaskAlignedAssigner, dist2bbox, make_anchors
@@ -144,8 +144,9 @@ class Loss:
         h = model.args  # hyperparameters
 
         m = model.model[-1]  # Detect() module
-        if pos_weight is None:
-            self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        if not pos_weight:
+            # self.bce = nn.BCEWithLogitsLoss(reduction='none')
+            self.bce = FocalLoss(nn.BCEWithLogitsLoss(reduction='none'))
         else:
             pos_weight = torch.tensor(pos_weight, device=device)
             self.bce = nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
