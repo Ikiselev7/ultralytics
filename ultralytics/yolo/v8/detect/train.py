@@ -14,7 +14,7 @@ from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, RANK, colorstr
 from ultralytics.yolo.utils.loss import BboxLoss, FocalLoss, VarifocalLoss
 from ultralytics.yolo.utils.ops import xywh2xyxy
 from ultralytics.yolo.utils.plotting import plot_images, plot_labels, plot_results
-from ultralytics.yolo.utils.tal import TaskAlignedAssigner, dist2bbox, make_anchors
+from ultralytics.yolo.utils.tal import TaskAlignedAssigner, dist2bbox, make_anchors, SoftTaskAlignedAssigner
 from ultralytics.yolo.utils.torch_utils import de_parallel, torch_distributed_zero_first
 
 
@@ -147,7 +147,7 @@ class Loss:
         if not pos_weight:
             self.bce = nn.BCEWithLogitsLoss(reduction='none')
             # self.bce = FocalLoss(nn.BCEWithLogitsLoss(reduction='none'))
-            self.varifocal_loss = VarifocalLoss()
+            # self.varifocal_loss = VarifocalLoss()
         else:
             pos_weight = torch.tensor(pos_weight, device=device)
             self.bce = nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
@@ -160,7 +160,7 @@ class Loss:
 
         self.use_dfl = m.reg_max > 1
 
-        self.assigner = TaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
+        self.assigner = SoftTaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=self.use_dfl).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
@@ -214,15 +214,15 @@ class Loss:
         # pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
 
-        target_labels, target_bboxes, target_scores, fg_mask, _ = self.assigner(
+        _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
             pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
             anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
 
         target_scores_sum = max(target_scores.sum(), 1)
 
         # cls loss
-        loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        # loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
+        loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
 
         # bbox loss
         if fg_mask.sum():
