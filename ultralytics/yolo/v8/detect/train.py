@@ -160,7 +160,7 @@ class Loss:
 
         self.use_dfl = m.reg_max > 1
 
-        self.assigner = SoftTaskAlignedAssigner(topk=20, num_classes=self.nc, alpha=0.5, beta=6.0)
+        self.assigner = SoftTaskAlignedAssigner(topk=15, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=self.use_dfl).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 

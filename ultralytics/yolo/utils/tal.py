@@ -303,7 +303,7 @@ class SoftTaskAlignedAssigner(nn.Module):
         assert 0 <= smoothing < 1
         fg_mask = fg_mask.to(targets.dtype)
         with torch.no_grad():
-            targets = (targets * (1.0 - smoothing) + 0.5 * smoothing) * fg_mask.unsqueeze(-1)
+            targets = (targets * (1.0 - smoothing) + smoothing / 8) * fg_mask.unsqueeze(-1)
         return targets
 
     @torch.no_grad()
