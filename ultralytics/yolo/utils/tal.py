@@ -398,7 +398,7 @@ class SoftTaskAlignedAssigner(nn.Module):
         bbox_scores[mask_gt] = pd_scores[ind[0], :][mask_gt]  # b, max_num_obj, h*w
 
         bbox_scores[mask_gt] = (bbox_scores *
-                                self.partial_smooth_labels(
+                                self._smooth(
                                     torch.nn.functional.one_hot(
                                         gt_labels.expand([self.bs, self.n_max_boxes, na]).long(),
                                         pd_scores.size(2)
@@ -494,7 +494,7 @@ class SoftTaskAlignedAssigner(nn.Module):
                                     device=target_labels.device)  # (b, h*w, 80)
         target_scores.scatter_(2, target_labels.unsqueeze(-1), 1)
 
-        target_scores = self.partial_smooth_labels(target_scores, fg_mask, 0.2)
+        target_scores = self._smooth(target_scores, fg_mask, 0.2)
 
         fg_scores_mask = fg_mask[:, :, None].repeat(1, 1, self.num_classes)  # (b, h*w, 80)
         target_scores = torch.where(fg_scores_mask > 0, target_scores, 0)
