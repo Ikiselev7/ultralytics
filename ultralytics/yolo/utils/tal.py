@@ -306,6 +306,23 @@ class SoftTaskAlignedAssigner(nn.Module):
             targets = (targets * (1.0 - smoothing) + smoothing / 8) * fg_mask.unsqueeze(-1)
         return targets
 
+
+    def partial_smooth_labels(self, targets, fg_mask, smooth_factor=0.0):
+        fg_mask = fg_mask.to(targets.dtype)
+        with torch.no_grad():
+            mask1 = (targets[..., :2].sum(dim=-1) == 1)
+            mask1 = mask1.unsqueeze(-1).expand_as(targets[..., :2])
+
+            mask2 = (targets[..., 3:8].sum(dim=-1) == 1)
+            mask2 = mask2.unsqueeze(-1).expand_as(targets[..., 3:8])
+
+            targets[..., :2] = torch.where(mask1, targets[..., :2] * (1 - smooth_factor) + smooth_factor / 2, targets[..., :2])
+            targets[..., 3:8] = torch.where(mask2, targets[..., 3:8] * (1 - smooth_factor) + smooth_factor / 5, targets[..., 3:8])
+
+        # No smoothing on tensor[..., 2:3]
+
+        return targets * fg_mask.unsqueeze(-1)
+
     @torch.no_grad()
     def forward(self, pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt):
         """
@@ -381,7 +398,7 @@ class SoftTaskAlignedAssigner(nn.Module):
         bbox_scores[mask_gt] = pd_scores[ind[0], :][mask_gt]  # b, max_num_obj, h*w
 
         bbox_scores[mask_gt] = (bbox_scores *
-                                self._smooth(
+                                self.partial_smooth_labels(
                                     torch.nn.functional.one_hot(
                                         gt_labels.expand([self.bs, self.n_max_boxes, na]).long(),
                                         pd_scores.size(2)
@@ -477,7 +494,7 @@ class SoftTaskAlignedAssigner(nn.Module):
                                     device=target_labels.device)  # (b, h*w, 80)
         target_scores.scatter_(2, target_labels.unsqueeze(-1), 1)
 
-        target_scores = self._smooth(target_scores, fg_mask, 0.2)
+        target_scores = self.partial_smooth_labels(target_scores, fg_mask, 0.2)
 
         fg_scores_mask = fg_mask[:, :, None].repeat(1, 1, self.num_classes)  # (b, h*w, 80)
         target_scores = torch.where(fg_scores_mask > 0, target_scores, 0)
