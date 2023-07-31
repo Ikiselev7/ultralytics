@@ -124,6 +124,9 @@ class DetectionValidator(BaseValidator):
     def get_stats(self):
         """Returns metrics statistics and results dictionary."""
         stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*self.stats)]  # to numpy
+        import pickle
+        with open(f'{self.args.save_dir}/stats.pkl', 'wb') as f:
+            pickle.dump(stats, f)
         if len(stats) and stats[0].any():
             self.metrics.process(*stats)
         self.nt_per_class = np.bincount(stats[-1].astype(int), minlength=self.nc)  # number of targets per class
