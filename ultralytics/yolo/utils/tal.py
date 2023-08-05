@@ -404,7 +404,7 @@ class SoftTaskAlignedAssigner(nn.Module):
                                         pd_scores.size(2)
                                     ).to(bbox_scores.dtype),
                                     mask_gt,
-                                    0.5)
+                                    0.2)
                                 )[mask_gt]
         bbox_scores = bbox_scores.amax(dim=3)
 
@@ -494,7 +494,7 @@ class SoftTaskAlignedAssigner(nn.Module):
                                     device=target_labels.device)  # (b, h*w, 80)
         target_scores.scatter_(2, target_labels.unsqueeze(-1), 1)
 
-        target_scores = self._smooth(target_scores, fg_mask, 0.5)
+        target_scores = self._smooth(target_scores, fg_mask, 0.2)
 
         fg_scores_mask = fg_mask[:, :, None].repeat(1, 1, self.num_classes)  # (b, h*w, 80)
         target_scores = torch.where(fg_scores_mask > 0, target_scores, 0)
