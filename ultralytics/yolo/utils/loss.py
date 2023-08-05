@@ -79,6 +79,17 @@ class BboxLoss(nn.Module):
         return loss_iou, loss_dfl
 
     @staticmethod
+    def _df_loss(pred_dist, target):
+        """Return sum of left and right DFL losses."""
+        # Distribution Focal Loss (DFL) proposed in Generalized Focal Loss https://ieeexplore.ieee.org/document/9792391
+        tl = target.long()  # target left
+        tr = tl + 1  # target right
+        wl = tr - target  # weight left
+        wr = 1 - wl  # weight right
+        return (F.cross_entropy(pred_dist, tl.view(-1), reduction='none').view(tl.shape) * wl +
+                F.cross_entropy(pred_dist, tr.view(-1), reduction='none').view(tl.shape) * wr).mean(-1, keepdim=True)
+
+    @staticmethod
     def _smooth(targets:torch.Tensor, smoothing=0.0):
         assert 0 <= smoothing < 1
         with torch.no_grad():
@@ -86,7 +97,7 @@ class BboxLoss(nn.Module):
         return targets
 
     @staticmethod
-    def _df_loss(pred_dist, target):
+    def _df_smooth_loss(pred_dist, target):
         """Return sum of left and right DFL losses."""
         # Distribution Focal Loss (DFL) proposed in Generalized Focal Loss https://ieeexplore.ieee.org/document/9792391
         tl = target.long()  # target left
