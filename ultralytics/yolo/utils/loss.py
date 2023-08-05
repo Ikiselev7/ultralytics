@@ -79,6 +79,13 @@ class BboxLoss(nn.Module):
         return loss_iou, loss_dfl
 
     @staticmethod
+    def _smooth(targets:torch.Tensor, smoothing=0.0):
+        assert 0 <= smoothing < 1
+        with torch.no_grad():
+            targets = targets * (1.0 - smoothing) + smoothing / targets.shape[1]
+        return targets
+
+    @staticmethod
     def _df_loss(pred_dist, target):
         """Return sum of left and right DFL losses."""
         # Distribution Focal Loss (DFL) proposed in Generalized Focal Loss https://ieeexplore.ieee.org/document/9792391
@@ -86,8 +93,15 @@ class BboxLoss(nn.Module):
         tr = tl + 1  # target right
         wl = tr - target  # weight left
         wr = 1 - wl  # weight right
-        return (F.cross_entropy(pred_dist, tl.view(-1), reduction='none').view(tl.shape) * wl +
-                F.cross_entropy(pred_dist, tr.view(-1), reduction='none').view(tl.shape) * wr).mean(-1, keepdim=True)
+        tl_one_hot = torch.zeros((tl.view(-1).shape[0], pred_dist.shape[1]), dtype=torch.int64, device=tl.device)
+        tl_one_hot.scatter_(1, tl.view(-1).unsqueeze(1), 1).unsqueeze(1)
+        tl_one_hot = BboxLoss._smooth(tl_one_hot, smoothing=0.2)
+        tr_one_hot = torch.zeros((tr.view(-1).shape[0], pred_dist.shape[1]), dtype=torch.int64, device=tr.device)
+        tr_one_hot.scatter_(1, tr.view(-1).unsqueeze(1), 1)
+        tr_one_hot = BboxLoss._smooth(tr_one_hot, smoothing=0.2)
+        return (F.binary_cross_entropy_with_logits(pred_dist, tl_one_hot.float(), reduction='none') * wl.view(-1).unsqueeze(-1) +
+                F.binary_cross_entropy_with_logits(pred_dist, tr_one_hot.float(), reduction='none') * wr.view(-1).unsqueeze(-1)) \
+            .view(wl.shape[0], -1).mean(-1, keepdim=True)
 
 
 class KeypointLoss(nn.Module):
